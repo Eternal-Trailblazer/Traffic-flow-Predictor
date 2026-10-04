@@ -3,7 +3,7 @@ Phase 5: Streamlit dashboard for the traffic-flow predictor.
 
 Features
 --------
-* Sidebar: lookback selector, horizon selector (15/30/60 min), "simulate live" toggle.
+* Sidebar: lookback slider, horizon selector (15/30/60 min), "simulate live" toggle.
 * Plotly chart: actual vs. predicted with a visually separated forecast region.
 * Colour-coded congestion indicator (Low / Medium / High).
 * Metrics panel with MAE / RMSE / R2 for the selected horizon.
@@ -51,10 +51,25 @@ DISPLAY_WINDOWS = {
     "2 days": 48 * 12,
 }
 
+# Congestion semantics (label -> colour).
 CONGESTION_COLOURS = {
-    "Low": "#2e7d32",     # green
-    "Medium": "#f9a825",  # amber
-    "High": "#c62828",    # red
+    "Low": "#22c55e",     # green
+    "Medium": "#f59e0b",  # amber
+    "High": "#ef4444",    # red
+}
+CONGESTION_TINT = {  # translucent version used for the capacity bar
+    "Low": "rgba(34,197,94,0.35)",
+    "Medium": "rgba(245,158,11,0.35)",
+    "High": "rgba(239,68,68,0.35)",
+}
+
+# Chart trace colours — deliberately distinct from the congestion palette so a
+# prediction line is never mistaken for a congestion state.
+TRACE_COLOURS = {
+    "actual": "#38bdf8",     # sky
+    "predicted": "#a78bfa",  # violet
+    "forecast": "#fb7185",   # rose
+    "capacity": "#4ade80",   # green
 }
 
 HORIZON_STEPS_BY_MIN = dict(zip(HORIZONS_MIN, HORIZONS_STEPS))
@@ -64,6 +79,267 @@ st.set_page_config(
     page_icon="🚦",
     layout="wide",
 )
+
+# Which theme are we rendering into? (light/dark) so chart + cards match it.
+IS_DARK = (st.context.theme.type or "dark") != "light"
+
+
+# --------------------------------------------------------------------------- #
+# Styling
+# --------------------------------------------------------------------------- #
+def _theme_vars() -> str:
+    if IS_DARK:
+        return """
+            --card-bg: rgba(255,255,255,0.035);
+            --card-border: rgba(255,255,255,0.09);
+            --muted: #8b98ab;
+            --text: #e5ecf5;
+            --grid: rgba(255,255,255,0.07);
+            --hover-border: rgba(56,189,248,0.55);
+        """
+    return """
+        --card-bg: rgba(15,23,42,0.03);
+        --card-border: rgba(15,23,42,0.12);
+        --muted: #5b6676;
+        --text: #0f172a;
+        --grid: rgba(15,23,42,0.09);
+        --hover-border: rgba(2,132,199,0.55);
+    """
+
+
+PAGE_CSS = f"""
+<style>
+:root {{
+    --accent: #38bdf8;
+    --low: #22c55e;
+    --medium: #f59e0b;
+    --high: #ef4444;
+    {_theme_vars()}
+}}
+
+/* ---- page rhythm -------------------------------------------------------- */
+.block-container {{
+    /* Streamlit's fixed header overlays the top 60px — keep clear of it. */
+    padding-top: calc(60px + 1.4rem);
+    padding-bottom: 2.5rem;
+    max-width: 1280px;
+}}
+h1, h2, h3 {{ letter-spacing: -0.02em; }}
+
+/* ---- hero header -------------------------------------------------------- */
+.tfp-hero {{
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    padding-bottom: 0.4rem;
+    margin-bottom: 1rem;
+    border-bottom: 1px solid var(--card-border);
+}}
+.tfp-title {{
+    font-size: 1.9rem;
+    font-weight: 800;
+    color: var(--text);
+    line-height: 1.15;
+}}
+.tfp-sub {{
+    font-size: 0.92rem;
+    color: var(--muted);
+    margin-top: 0.3rem;
+}}
+.tfp-live {{
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.32rem 0.75rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    border: 1px solid var(--card-border);
+    background: var(--card-bg);
+    color: var(--muted);
+    white-space: nowrap;
+}}
+.tfp-live.on {{
+    border-color: rgba(34,197,94,0.55);
+    color: #22c55e;
+    background: rgba(34,197,94,0.10);
+}}
+.tfp-dot {{
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor;
+}}
+.tfp-live.on .tfp-dot {{ animation: tfpPulse 1.6s ease-in-out infinite; }}
+@keyframes tfpPulse {{
+    0%, 100% {{ opacity: 1; transform: scale(1); }}
+    50%      {{ opacity: 0.35; transform: scale(0.7); }}
+}}
+
+/* ---- KPI cards ---------------------------------------------------------- */
+.tfp-card {{
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem 0.95rem;
+    min-height: 132px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}}
+.tfp-card:hover {{
+    transform: translateY(-2px);
+    border-color: var(--hover-border);
+    box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+}}
+.tfp-card.accent {{ border-left: 3px solid var(--accent-col, var(--accent)); }}
+.tfp-label {{
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}}
+.tfp-value {{
+    font-size: 1.75rem;
+    font-weight: 800;
+    color: var(--text);
+    line-height: 1.1;
+    margin: 0.35rem 0 0.15rem;
+    white-space: nowrap;
+}}
+.tfp-unit {{
+    font-size: 0.7rem;
+    font-weight: 600;
+    color: var(--muted);
+    margin-left: 0.3rem;
+    white-space: nowrap;
+}}
+.tfp-sub {{
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.35;
+}}
+.tfp-up   {{ color: #ef4444; font-weight: 700; }}
+.tfp-down {{ color: #22c55e; font-weight: 700; }}
+
+/* capacity utilisation bar */
+.tfp-bar {{
+    height: 6px;
+    border-radius: 3px;
+    background: var(--card-border);
+    overflow: hidden;
+    margin: 0.5rem 0 0.4rem;
+}}
+.tfp-bar > span {{
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.35s ease;
+}}
+
+/* ---- metrics panel ------------------------------------------------------ */
+div[data-testid="stMetric"] {{
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+}}
+[data-testid="stMetricLabel"] {{
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted) !important;
+}}
+[data-testid="stMetricValue"] {{ font-size: 1.6rem !important; font-weight: 800; }}
+[data-testid="stMetricDelta"] {{ font-size: 0.82rem !important; }}
+
+/* ---- sidebar ------------------------------------------------------------ */
+[data-testid="stSidebar"] {{
+    border-right: 1px solid var(--card-border);
+}}
+[data-testid="stSidebar"] .block-container {{
+    padding-top: 1.6rem;
+}}
+[data-testid="stSidebar"] label {{
+    font-weight: 600;
+}}
+.tfp-side-note {{
+    font-size: 0.78rem;
+    color: var(--muted);
+    line-height: 1.5;
+}}
+
+/* section eyebrow above the chart / metrics */
+.tfp-section {{
+    font-size: 0.72rem;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0.4rem 0 0.15rem;
+}}
+</style>
+"""
+
+
+def kpi_card(label: str, value: str, sub: str = "", *, unit: str = "",
+             accent: str | None = None, bar: tuple[int, str] | None = None) -> str:
+    """Builds the HTML for one dashboard KPI card."""
+    cls = "tfp-card accent" if accent else "tfp-card"
+    accent_style = f"--accent-col:{accent};" if accent else ""
+    bar_html = ""
+    if bar is not None:
+        pct, colour = bar
+        bar_html = (
+            f'<div class="tfp-bar"><span style="width:{max(0.0, min(100.0, pct)):.1f}%;'
+            f'background:{colour}"></span></div>'
+        )
+    unit_html = f'<span class="tfp-unit">{unit}</span>' if unit else ""
+    return f"""
+    <div class="{cls}" style="{accent_style}">
+      <div class="tfp-label">{label}</div>
+      <div class="tfp-value">{value}{unit_html}</div>
+      {bar_html}
+      <div class="tfp-sub">{sub}</div>
+    </div>
+    """
+
+
+def render_header(horizon_min: int, capacity: float, live_mode: bool,
+                  live_interval: int, now_ts: pd.Timestamp) -> None:
+    """Compact hero header: title, context line and a live/static status pill."""
+    if live_mode:
+        status = (
+            f'<span class="tfp-live on"><span class="tfp-dot"></span>'
+            f'LIVE · {live_interval}s</span>'
+        )
+    else:
+        status = (
+            f'<span class="tfp-live"><span class="tfp-dot"></span>'
+            f'STATIC · {now_ts:%H:%M}</span>'
+        )
+    st.markdown(
+        f"""
+        <div class="tfp-hero">
+          <div>
+            <div class="tfp-title">🚦 Traffic Flow Predictor</div>
+            <div class="tfp-sub">
+              Forecasting vehicle counts <b>{horizon_min} minutes ahead</b>
+              &nbsp;·&nbsp; capacity (95th percentile) ≈ <b>{capacity:,.0f}</b> veh / 5 min
+            </div>
+          </div>
+          <div>{status}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -138,41 +414,76 @@ def _forecast_value(preds, lookback, now_idx, fallback):
     return float(fallback)
 
 
-def render_congestion_card(label, predicted, capacity, horizon_min, now_ts):
-    colour = CONGESTION_COLOURS.get(label, "#607d8b")
-    text_colour = "#1b1b1b" if label == "Medium" else "#ffffff"
-    pct = (predicted / capacity * 100) if capacity > 0 else 0.0
-    st.markdown(
-        f"""
-        <div style="
-            background:{colour};
-            color:{text_colour};
-            padding:1.1rem 1.3rem;
-            border-radius:0.8rem;
-            box-shadow:0 2px 8px rgba(0,0,0,0.25);
-            margin-bottom:0.5rem;">
-          <div style="font-size:0.85rem;letter-spacing:0.05em;text-transform:uppercase;opacity:0.9;">
-            Congestion &mdash; {horizon_min} min ahead
-          </div>
-          <div style="font-size:2.4rem;font-weight:800;line-height:1.2;">{label}</div>
-          <div style="font-size:0.95rem;opacity:0.95;">
-            Predicted <b>{predicted:,.0f}</b> veh / 5 min
-            &nbsp;·&nbsp; {pct:,.0f}% of 95th-pct capacity ({capacity:,.0f})
-            &nbsp;·&nbsp; from {now_ts:%Y-%m-%d %H:%M}
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity, kpi_slot):
+    """Four KPI cards: congestion state, forecast, now, capacity."""
+    now_ts = df["timestamp"].iloc[now_idx]
+    actual_now = float(df["vehicle_count"].iloc[now_idx])
+    forecast_val = _forecast_value(preds, lookback, now_idx, actual_now)
+    label, _ = get_congestion_level(forecast_val, capacity)
+
+    pct = (forecast_val / capacity * 100) if capacity > 0 else 0.0
+    colour = CONGESTION_COLOURS.get(label, "#64748b")
+    delta = forecast_val - actual_now
+    delta_cls = "tfp-up" if delta > 0 else ("tfp-down" if delta < 0 else "")
+    delta_txt = ("▲" if delta > 0 else ("▼" if delta < 0 else "•")) + f"{abs(delta):,.0f} vs now"
+
+    c1, c2, c3, c4 = st.columns([1.25, 1, 1, 1])
+
+    with c1:
+        st.markdown(
+            kpi_card(
+                "Congestion",
+                label,
+                f"in {horizon_min} min · {forecast_val:,.0f} veh · {pct:,.0f}% of capacity",
+                accent=colour,
+                bar=(pct, colour),
+            ),
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            kpi_card(
+                "Forecast",
+                f"{forecast_val:,.0f}",
+                f'in {horizon_min} min · <span class="{delta_cls}">{delta_txt}</span>',
+                unit="veh/5 min",
+                accent=TRACE_COLOURS["forecast"],
+            ),
+            unsafe_allow_html=True,
+        )
+    with c3:
+        st.markdown(
+            kpi_card(
+                "Current",
+                f"{actual_now:,.0f}",
+                f"{now_ts:%H:%M} · row {now_idx + 1:,} of {len(df):,}",
+                unit="veh/5 min",
+            ),
+            unsafe_allow_html=True,
+        )
+    with c4:
+        st.markdown(
+            kpi_card(
+                "Capacity",
+                f"{capacity:,.0f}",
+                "95th percentile · reference line on chart",
+                unit="veh/5 min",
+                accent=TRACE_COLOURS["capacity"],
+            ),
+            unsafe_allow_html=True,
+        )
 
 
-def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_steps, capacity):
-    horizon_steps = HORIZON_STEPS_BY_MIN[horizon_min]
+def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx,
+                 display_steps, capacity):
     ts = df["timestamp"].values
     vals = df["vehicle_count"].values
     vis_start = max(0, now_idx - display_steps + 1)
     now_ts = df["timestamp"].iloc[now_idx]
     forecast_ts = now_ts + pd.Timedelta(minutes=horizon_min)
+
+    grid = "rgba(255,255,255,0.07)" if IS_DARK else "rgba(15,23,42,0.09)"
+    axis_text = "#8b98ab" if IS_DARK else "#5b6676"
 
     fig = go.Figure()
 
@@ -180,14 +491,24 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_
     fig.add_vrect(
         x0=now_ts,
         x1=forecast_ts,
-        fillcolor="#ff7f0e",
-        opacity=0.13,
+        fillcolor=TRACE_COLOURS["predicted"],
+        opacity=0.14,
         line_width=0,
         annotation_text=f"Forecast ({horizon_min} min)",
         annotation_position="top left",
-        annotation_font_size=12,
+        annotation_font_size=11,
+        annotation_font_color=axis_text,
     )
-    fig.add_vline(x=now_ts, line_width=1, line_dash="dot", line_color="#888888")
+    fig.add_vline(
+        x=now_ts,
+        line_width=1,
+        line_dash="dot",
+        line_color=axis_text,
+        annotation_text="now",
+        annotation_position="bottom right",
+        annotation_font_size=10,
+        annotation_font_color=axis_text,
+    )
 
     # --- Actuals ------------------------------------------------------------ #
     fig.add_trace(
@@ -196,7 +517,8 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_
             y=vals[vis_start:now_idx + 1],
             mode="lines",
             name="Actual",
-            line=dict(color="#1f77b4", width=2),
+            line=dict(color=TRACE_COLOURS["actual"], width=2),
+            hovertemplate="%{x|%b %d %H:%M} · %{y:.0f} veh<extra>Actual</extra>",
         )
     )
 
@@ -209,7 +531,8 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_
                 y=preds[mask],
                 mode="lines",
                 name=f"Predicted ({horizon_min} min ahead)",
-                line=dict(color="#ff7f0e", width=1.7, dash="dash"),
+                line=dict(color=TRACE_COLOURS["predicted"], width=1.8, dash="dash"),
+                hovertemplate="%{x|%b %d %H:%M} · %{y:.0f} veh<extra>Predicted</extra>",
             )
         )
 
@@ -221,8 +544,9 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_
             y=[vals[now_idx], forecast_val],
             mode="lines+markers",
             name="Forecast",
-            line=dict(color="#d62728", width=2.6),
-            marker=dict(size=10, symbol="diamond", color="#d62728"),
+            line=dict(color=TRACE_COLOURS["forecast"], width=2.6),
+            marker=dict(size=10, symbol="diamond", color=TRACE_COLOURS["forecast"]),
+            hovertemplate="%{x|%b %d %H:%M} · %{y:.0f} veh<extra>Forecast</extra>",
         )
     )
 
@@ -232,37 +556,86 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx, display_
             y=capacity,
             line_width=1,
             line_dash="longdash",
-            line_color="#2e7d32",
+            line_color=TRACE_COLOURS["capacity"],
             annotation_text="95th-pct capacity",
             annotation_position="bottom right",
-            annotation_font_size=11,
+            annotation_font_size=10,
+            annotation_font_color=axis_text,
         )
 
     fig.update_layout(
-        template="plotly_white",
-        height=520,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        xaxis_title="Time",
-        yaxis_title="Vehicles per 5-min interval",
+        template="plotly_dark" if IS_DARK else "plotly_white",
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        height=500,
+        margin=dict(l=64, r=8, t=56, b=8),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.04,
+            xanchor="left",
+            x=0,
+            font=dict(size=12),
+        ),
         hovermode="x unified",
+        hoverlabel=dict(font_size=13),
+        # Keeps zoom/pan stable while live ticks re-render the figure.
+        uirevision="tfp-chart",
+        font=dict(color=axis_text),
+    )
+    fig.update_xaxes(
+        gridcolor=grid,
+        zeroline=False,
+        showline=False,
+        title="",
+        linecolor=grid,
+        tickfont=dict(color=axis_text),
+    )
+    fig.update_yaxes(
+        gridcolor=grid,
+        zeroline=False,
+        showline=False,
+        title="Vehicles / 5 min",
+        title_font=dict(color=axis_text, size=12),
+        tickfont=dict(color=axis_text),
     )
     return fig
 
 
 def render_metrics_panel(metrics, lookback, horizon_min, scale):
+    """MAE / RMSE / R² cards with deltas against the persistence baseline."""
     xgb = metrics["xgboost"]
     pers = metrics["persistence"]
 
-    st.subheader(
-        f"Model metrics — {horizon_min} min horizon "
-        f"(lookback {lookback * SAMPLING_INTERVAL_MIN} min)"
+    st.markdown(
+        f'<div class="tfp-section">Model performance · {horizon_min} min horizon'
+        f' · lookback {lookback * SAMPLING_INTERVAL_MIN} min</div>',
+        unsafe_allow_html=True,
     )
+
+    # MAE/RMSE are "lower is better" (inverse), R² is "higher is better".
+    mae_delta = (xgb["MAE"] - pers["MAE"]) * scale
+    rmse_delta = (xgb["RMSE"] - pers["RMSE"]) * scale
+    r2_delta = xgb["R2"] - pers["R2"]
+
     c1, c2, c3 = st.columns(3)
-    # MAE/RMSE were computed in standardized units; convert back to vehicles.
-    c1.metric("MAE (veh/5min)", f"{xgb['MAE'] * scale:,.1f}", help="Mean Absolute Error (test set)")
-    c2.metric("RMSE (veh/5min)", f"{xgb['RMSE'] * scale:,.1f}", help="Root Mean Squared Error (test set)")
-    c3.metric("R²", f"{xgb['R2']:.3f}", help="Coefficient of determination (test set)")
+    c1.metric(
+        "MAE", f"{xgb['MAE'] * scale:,.1f}",
+        delta=f"{mae_delta:+,.1f} vs baseline",
+        delta_color="inverse",
+        help="Mean Absolute Error on the chronological test split, in vehicles.",
+    )
+    c2.metric(
+        "RMSE", f"{xgb['RMSE'] * scale:,.1f}",
+        delta=f"{rmse_delta:+,.1f} vs baseline",
+        delta_color="inverse",
+        help="Root Mean Squared Error on the chronological test split, in vehicles.",
+    )
+    c3.metric(
+        "R²", f"{xgb['R2']:.3f}",
+        delta=f"{r2_delta:+.3f} vs baseline",
+        help="Coefficient of determination on the chronological test split.",
+    )
 
     with st.expander("Baseline comparison & standardized metrics"):
         st.markdown(
@@ -272,88 +645,84 @@ def render_metrics_panel(metrics, lookback, horizon_min, scale):
         st.dataframe(
             pd.DataFrame(
                 {
-                    "XGBoost": {
-                        "MAE (std)": xgb["MAE"],
-                        "RMSE (std)": xgb["RMSE"],
-                        "R²": xgb["R2"],
-                    },
-                    "Persistence": {
-                        "MAE (std)": pers["MAE"],
-                        "RMSE (std)": pers["RMSE"],
-                        "R²": pers["R2"],
-                    },
-                }
-            )
+                    "XGBoost (std)": [xgb["MAE"], xgb["RMSE"], xgb["R2"]],
+                    "Persistence (std)": [pers["MAE"], pers["RMSE"], pers["R2"]],
+                },
+                index=["MAE", "RMSE", "R²"],
+            ),
+            width="stretch",
         )
 
 
 def render_view(now_idx, slots, df, preds, target_idx, lookback, horizon_min,
                 capacity, display_steps):
-    """Draws the congestion card + chart + caption into the given placeholders."""
-    indicator_slot, chart_slot, caption_slot = slots
-    now_ts = df["timestamp"].iloc[now_idx]
-    actual_now = float(df["vehicle_count"].iloc[now_idx])
-    forecast_val = _forecast_value(preds, lookback, now_idx, actual_now)
-    label, _ = get_congestion_level(forecast_val, capacity)
+    """Draws the KPI row + chart into the given placeholders."""
+    kpi_slot, chart_slot = slots
 
-    with indicator_slot.container():
-        left, right = st.columns([1, 2])
-        with left:
-            render_congestion_card(label, forecast_val, capacity, horizon_min, now_ts)
-        with right:
-            delta = forecast_val - actual_now
-            st.metric(
-                f"Current count ({now_ts:%H:%M})",
-                f"{actual_now:,.0f} veh / 5 min",
-                delta=f"{delta:+,.0f} vs forecast",
-            )
-            st.metric(
-                "Forecast 95th-% capacity utilisation",
-                f"{(forecast_val / capacity * 100) if capacity > 0 else 0:,.0f}%",
-            )
+    with kpi_slot.container():
+        render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity, kpi_slot)
 
     with chart_slot.container():
+        st.markdown(
+            '<div class="tfp-section">Traffic flow · actual vs predicted</div>',
+            unsafe_allow_html=True,
+        )
         fig = build_figure(
             df, preds, target_idx, lookback, horizon_min, now_idx, display_steps, capacity
         )
-        st.plotly_chart(fig, width="stretch")
-
-    with caption_slot.container():
-        st.caption(
-            f"Showing row {now_idx + 1:,} of {len(df):,} "
-            f"({now_ts:%Y-%m-%d %H:%M}). Each model was trained for a fixed lookback; "
-            f"the slider selects among pre-trained models."
+        st.plotly_chart(
+            fig,
+            width="stretch",
+            config={"displayModeBar": "hover", "displaylogo": False},
         )
 
 
 # --------------------------------------------------------------------------- #
 # Sidebar
 # --------------------------------------------------------------------------- #
-st.sidebar.header("Controls")
+st.sidebar.markdown('<div class="tfp-section">Controls</div>', unsafe_allow_html=True)
 
 lookback = st.sidebar.select_slider(
-    "Lookback window (sliding history used as model input)",
+    "Lookback window",
     options=LOOKBACK_OPTIONS,
     value=LOOKBACK_OPTIONS[1],
-    format_func=lambda steps: f"{steps} steps ({steps * SAMPLING_INTERVAL_MIN} min)",
+    format_func=lambda steps: f"{steps * SAMPLING_INTERVAL_MIN} min",
+    help="Sliding history used as model input. Models are pre-trained for each "
+         "of these stops — moving the slider swaps models rather than retraining.",
 )
-horizon_min = st.sidebar.selectbox("Prediction horizon", HORIZONS_MIN, index=1)
-display_label = st.sidebar.selectbox("Chart history", list(DISPLAY_WINDOWS.keys()), index=1)
+horizon_min = st.sidebar.segmented_control(
+    "Prediction horizon",
+    options=HORIZONS_MIN,
+    default=30,
+    selection_mode="single",
+    format_func=lambda m: f"{m} min",
+    width="stretch",
+) or 30
+display_label = st.sidebar.segmented_control(
+    "Chart history",
+    options=list(DISPLAY_WINDOWS.keys()),
+    default="1 day",
+    selection_mode="single",
+    width="stretch",
+) or "1 day"
+
 live_mode = st.sidebar.toggle("Simulate live", value=False)
-live_interval = st.sidebar.slider(
-    "Live refresh (seconds)", min_value=1, max_value=10, value=3, disabled=not live_mode
-)
+live_interval = 3
+if live_mode:
+    live_interval = st.sidebar.slider("Refresh (seconds)", 1, 10, 3)
 
-st.sidebar.markdown(
-    f"""
-    ---
-    **Lookback design**
-
-    Models are trained once for the fixed lookbacks
-    `{LOOKBACK_OPTIONS}` (30 min / 1 h / 2 h) and the slider picks among them;
-    we do not retrain on the fly. See the README for details.
-    """
-)
+with st.sidebar.expander("About the lookback slider"):
+    st.markdown(
+        f"""
+        <div class="tfp-side-note">
+        The lookback changes the model <b>input shape</b>, so it cannot be
+        retrained on the fly. We train once for the fixed lookbacks
+        <code>{LOOKBACK_OPTIONS}</code> (30 min / 1 h / 2 h) and the slider picks
+        among those pre-trained models.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # --------------------------------------------------------------------------- #
 # Load data + model outputs
@@ -386,14 +755,14 @@ _scale = load_model_and_scaler(lookback, horizon_min)[1].scale_[0]
 # --------------------------------------------------------------------------- #
 # Main layout
 # --------------------------------------------------------------------------- #
-st.title("🚦 Traffic Flow Predictor")
-st.markdown(
-    f"Forecasting vehicle counts {horizon_min} minutes ahead · "
-    f"capacity (95th percentile) ≈ **{capacity:,.0f} veh / 5 min**."
-)
+st.markdown(PAGE_CSS, unsafe_allow_html=True)
 
-render_metrics_panel(metrics, lookback, horizon_min, _scale)
-st.divider()
+# Header is static content: it sits outside the live fragment so it never
+# flickers on each tick.
+_header_slot = st.empty()
+with _header_slot.container():
+    _ts = df["timestamp"].iloc[len(df) - 1]
+    render_header(horizon_min, capacity, live_mode, live_interval, _ts)
 
 if live_mode:
     live_start = max(lookback - 1, len(df) - 1 - (24 * 12))  # 1 day of ticks
@@ -403,18 +772,13 @@ if live_mode:
     if "_live_cursor" not in st.session_state:
         st.session_state._live_cursor = live_start
 
-    st.info(
-        f"Live simulation running every {live_interval}s — advancing one 5-minute "
-        "step per tick. Toggle **Simulate live** off to pause."
-    )
-
     @st.fragment(run_every=live_interval)
     def live_fragment():
         cursor = int(st.session_state._live_cursor)
         # st.empty() placeholders so the fragment rewrites in place each tick.
         render_view(
             cursor,
-            (st.empty(), st.empty(), st.empty()),
+            (st.empty(), st.empty()),
             df, preds, target_idx, lookback, horizon_min, capacity, display_steps,
         )
         nxt = cursor + 1
@@ -424,6 +788,9 @@ if live_mode:
 else:
     render_view(
         len(df) - 1,
-        (st.empty(), st.empty(), st.empty()),
+        (st.empty(), st.empty()),
         df, preds, target_idx, lookback, horizon_min, capacity, display_steps,
     )
+
+st.divider()
+render_metrics_panel(metrics, lookback, horizon_min, _scale)

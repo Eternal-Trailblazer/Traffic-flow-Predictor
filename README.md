@@ -24,6 +24,7 @@ traffic-flow-predictor/
 │   ├── test_windowing.py          # Windowing / leakage tests
 │   ├── test_congestion.py         # Congestion boundary tests
 │   └── test_inference_features.py # Training/inference feature parity
+├── .streamlit/config.toml     # Dashboard colour theme (dark, sky-blue accent)
 ├── models/                    # Trained artifacts (generated)
 ├── data/raw/traffic.csv       # Generated dataset
 └── requirements.txt
@@ -79,15 +80,25 @@ streamlit run app.py
   * **Chart history** — 12 h / 1 day / 2 days of context.
   * **Simulate live** — streams the mock data forward one 5-minute step per tick.
   * **Live refresh** — seconds between ticks (1–10 s).
-* **Main Plotly chart** — actual counts (solid blue), model predictions aligned to
-  their target timestamps (dashed orange), and the forecast point (red diamond).
-  The **forecast region is shaded and separated** from history by a dotted "now"
-  line and a capacity reference line.
-* **Congestion indicator** — a colour-coded metric card (🟢 Low / 🟡 Medium /
-  🔴 High) computed from the model's forecast relative to the road's observed
-  capacity.
-* **Metrics panel** — MAE / RMSE / R² for the selected horizon (XGBoost), with a
+* **Main Plotly chart** — actual counts (sky blue), model predictions aligned to
+  their target timestamps (dashed violet), and the forecast point (rose
+  diamond). The **forecast region is shaded and separated** from history by a
+  dotted "now" line and a green capacity reference line.
+* **KPI cards** — congestion state (with a capacity-utilisation bar), the
+  forecast value, the current count and observed capacity.
+* **Congestion indicator** — colour-coded (🟢 Low / 🟡 Medium / 🔴 High)
+  computed from the model's forecast relative to the road's observed capacity.
+* **Metrics panel** — MAE / RMSE / R² for the selected horizon (XGBoost), each
+  with a green/red delta against the persistence baseline, plus a
   persistence-baseline comparison table.
+
+### Colour theme
+
+`.streamlit/config.toml` defines a dark palette (near-black background, sky-blue
+accent) and the dashboard's custom CSS + Plotly layout pick it up automatically.
+The chart and card colours adapt to the active Streamlit theme via
+`st.context.theme.type`, so switching the theme in the header menu keeps charts
+and cards consistent.
 
 ### Caching
 
