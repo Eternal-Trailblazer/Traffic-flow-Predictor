@@ -27,6 +27,7 @@ traffic-flow-predictor/
 ├── .streamlit/config.toml     # Dashboard colour theme (dark, sky-blue accent)
 ├── models/                    # Trained artifacts (generated)
 ├── data/raw/traffic.csv       # Generated dataset
+├── pytest.ini                 # pytest config (puts repo root on sys.path)
 └── requirements.txt
 ```
 
@@ -171,7 +172,7 @@ data) — never on training data. On the dashboard, MAE/RMSE are shown in vehicl
 counts by multiplying the standardized error by the scaler's standard deviation;
 R² is scale-independent.
 
-Example (lookback 12, horizon 30 min): MAE ≈ 15.4 veh, RMSE ≈ 38.0 veh, R² ≈ 0.89.
+Example (lookback 12, horizon 30 min): MAE ≈ 15.3 veh, RMSE ≈ 37.7 veh, R² ≈ 0.89.
 
 ---
 

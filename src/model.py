@@ -46,15 +46,20 @@ def train_and_evaluate():
             print(f"{lookback:>5} st | {h_min:>3} mins | {'Persistence':<12} | {pers_metrics['MAE']:.3f} | {pers_metrics['RMSE']:.3f} | {pers_metrics['R2']:.3f}")
 
             # 3. XGBoost Model
+            # n_estimators is an upper bound; early stopping on the validation
+            # split picks the actual tree count. A fixed 100 trees was mildly
+            # overfit -- best_iteration lands around 40-80 on this data.
             xgb = XGBRegressor(
-                n_estimators=100,
+                n_estimators=300,
                 learning_rate=0.1,
                 max_depth=5,
                 random_state=42,
-                n_jobs=-1
+                n_jobs=-1,
+                eval_metric="rmse",
+                early_stopping_rounds=20,
             )
 
-            # Train on train set, use validation set to prevent overfitting
+            # Train on train set, validate to stop before overfitting
             xgb.fit(
                 X_train, y_train,
                 eval_set=[(X_val, y_val)],

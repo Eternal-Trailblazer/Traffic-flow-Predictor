@@ -86,8 +86,10 @@ def process_data(lookback=12, horizon=3):
     df = pd.read_csv("data/raw/traffic.csv")
     df = add_time_features(df)
     
-    # Handle the missing values injected in Phase 1 using forward fill
-    df['vehicle_count'] = df['vehicle_count'].ffill()
+    # Handle the missing values injected in Phase 1. Forward-fill for interior
+    # gaps, back-fill only any leading gap, matching the dashboard's loader so
+    # training and inference see identical data.
+    df['vehicle_count'] = df['vehicle_count'].ffill().bfill()
     
     # Chronological Split: 70% Train, 15% Val, 15% Test
     n = len(df)
