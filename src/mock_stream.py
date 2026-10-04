@@ -3,6 +3,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import timedelta
 
+from src.config import (
+    SYNTHETIC_NAME,
+    SYNTHETIC_INTERVAL_MIN,
+    SYNTHETIC_LOOKBACKS,
+    SYNTHETIC_HORIZON_STEPS,
+    write_dataset_meta,
+)
+
 def generate(days=90, seed=42):
     """Generates synthetic 5-minute interval traffic data."""
     np.random.seed(seed)
@@ -77,6 +85,13 @@ if __name__ == "__main__":
     
     # Save to raw data folder
     traffic_df.to_csv("data/raw/traffic.csv", index=False)
+    # Reset the manifest so the pipeline knows this is the 5-minute dataset
+    # (overrides anything written by src.load_dataset).
+    write_dataset_meta(
+        SYNTHETIC_NAME, SYNTHETIC_INTERVAL_MIN,
+        SYNTHETIC_LOOKBACKS, SYNTHETIC_HORIZON_STEPS,
+        source="src.mock_stream",
+    )
     print("Saved to data/raw/traffic.csv")
     
     # Visual check for the first 7 days (as requested by the plan's 'Done when' condition)

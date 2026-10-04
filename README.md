@@ -4,8 +4,10 @@ Predict a road's vehicle count **15 / 30 / 60 minutes ahead** from a stream of
 5-minute counts, and flag emerging congestion.
 
 The project is deliberately small and honest: synthetic data → windowed XGBoost →
-a Streamlit dashboard. Every design decision and its trade-offs are documented
-below.
+a Streamlit dashboard. It is also **cadence-aware**: an adapter can load a real
+dataset (a preset ships for the *Metro Interstate Traffic Volume* set, hourly) and
+the horizons, lookbacks and units follow the data. Every design decision and its
+trade-offs are documented below.
 
 ---
 
@@ -48,14 +50,20 @@ state-of-the-art benchmark.
 ┌───────────────────────┐
 │ Phases 3-4 - Model    │   src/model.py
 │ XGBoost per           │   early stopping on the validation split
-│ (lookback x horizon)  │   --> models/xgb_lb{L}_h{H}.joblib
-└───────────┬───────────┘       models/scaler.joblib, metrics.json
-            v
+│ (lookback x horizon)  │   --> models/xgb_lb{L}_h{H}_i{interval}.joblib
+└───────────┬───────────┘       models/scaler_i{interval}.joblib
+            v                   models/metrics_i{interval}.json
 ┌───────────────────────┐
 │ Phase 5 - App         │   app.py (Streamlit)
 │ dashboard + live loop │   make_features() - same code as training
 └───────────────────────┘
 ```
+
+**Phase 0 (optional).** `src/load_dataset.py` normalizes an external CSV into
+`data/raw/traffic.csv` and writes `data/raw/dataset_meta.json` (sampling interval,
+lookbacks, horizons). `src/config.py` reads that manifest, so the whole pipeline —
+including the dashboard's units — adapts to the data's cadence. Without the
+manifest, the synthetic 5-minute defaults apply.
 
 Two properties keep the pipeline honest:
 
@@ -74,18 +82,21 @@ Two properties keep the pipeline honest:
 traffic-flow-predictor/
 ├── app.py                     # Phase 5: Streamlit dashboard
 ├── src/
-│   ├── config.py              # Shared constants (horizons, lookbacks, thresholds)
+│   ├── config.py              # Cadence-aware constants; reads dataset_meta.json
 │   ├── mock_stream.py         # Phase 1: synthetic data generator + stream generator
+│   ├── load_dataset.py        # Phase 0: real-CSV adapter (Metro preset)
 │   ├── data_pipeline.py       # Phase 2: time features + windowing / feature building
 │   ├── model.py               # Phases 3–4: train, evaluate, persist models
 │   └── congestion.py          # Congestion level + colour mapping
 ├── tests/
 │   ├── test_windowing.py          # Windowing / leakage tests
 │   ├── test_congestion.py         # Congestion boundary tests
-│   └── test_inference_features.py # Training/inference feature parity
-├── docs/dashboard.png         # Dashboard screenshot (see below)
+│   ├── test_inference_features.py # Training/inference feature parity
+│   └── test_load_dataset.py       # Real-data adapter: dedupe, resampling, gaps
+├── docs/dashboard.png         # Dashboard screenshot (synthetic data)
+├── docs/dashboard_metro.png   # Dashboard screenshot (real Metro data)
 ├── .streamlit/config.toml     # Dashboard colour theme (dark, sky-blue accent)
-├── models/                    # Trained artifacts (generated)
+├── models/                    # Trained artifacts (generated, namespaced by interval)
 ├── data/raw/traffic.csv       # Generated dataset
 ├── pytest.ini                 # pytest config (puts repo root on sys.path)
 └── requirements.txt
@@ -104,7 +115,28 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-### 1. Generate the data
+### 0. (Optional) Use a real dataset
+
+The default dataset is synthetic. To run the pipeline on a real file instead,
+normalize it with the adapter, which writes the canonical CSV **and** a manifest
+telling the rest of the pipeline the sampling interval and model shape:
+
+```bash
+# Metro Interstate Traffic Volume (hourly) - download the CSV/CSV.GZ from Kaggle or UCI
+python -m src.load_dataset --preset metro \
+    --input data/external/Metro_Interstate_Traffic_Volume.csv.gz
+
+# Any other CSV (columns auto-detected; override with --timestamp-col / --value-col)
+python -m src.load_dataset --input my_traffic.csv --interval-min 5 --agg sum
+```
+
+The adapter drops duplicate timestamps (the Metro set ships thousands of repeated
+rows), resamples onto a regular grid, and keeps the **largest contiguous block**,
+splitting at outages longer than `--max-gap-h`. That way the pipeline never
+forward-fills months of downtime. Then run steps 2–3 unchanged. Re-run
+`python -m src.mock_stream` any time to switch back to the synthetic default.
+
+### 1. Generate the data (synthetic default)
 
 ```bash
 python -m src.mock_stream
@@ -112,7 +144,7 @@ python -m src.mock_stream
 
 Creates `data/raw/traffic.csv`: 90 days of 5-minute counts with weekday
 double-peaks, a flatter weekend curve, injected accidents/events and ~0.5%
-missing sensor values.
+missing sensor values. It also resets the manifest to the 5-minute defaults.
 
 ### 2. Train the models
 
@@ -120,13 +152,15 @@ missing sensor values.
 python -m src.model
 ```
 
-Trains one XGBoost model per **(lookback, horizon)** combination among the fixed
-lookbacks `[6, 12, 24]` (30 min / 1 h / 2 h) and horizons `[15, 30, 60]` minutes.
-Artifacts:
+Trains one XGBoost model per **(lookback, horizon)** combination. For the default
+5-minute synthetic data that is lookbacks `[6, 12, 24]` (30 min / 1 h / 2 h) and
+horizons `[15, 30, 60]` minutes; for the hourly Metro preset it is lookbacks
+`[3, 6, 12]` (3 / 6 / 12 h) and horizons `[1, 2, 3]` h. Artifacts are namespaced
+by sampling interval so datasets never collide:
 
-* `models/xgb_lb{lookback}_h{horizon}.joblib` — one model per pair
-* `models/scaler.joblib` — `StandardScaler` fitted on the training split only
-* `models/metrics.json` — MAE / RMSE / R² for XGBoost and the persistence baseline
+* `models/xgb_lb{lookback}_h{horizon}_i{interval}.joblib` — one model per pair
+* `models/scaler_i{interval}.joblib` — `StandardScaler` fitted on the training split only
+* `models/metrics_i{interval}.json` — MAE / RMSE / R² for XGBoost and the baseline
 
 ### 3. Run the dashboard
 
@@ -173,6 +207,31 @@ no consistent winner, so 1 hour is the default. Adding previous-day and
 previous-week lag features was also tested and did **not** improve these numbers,
 which is why the feature set stays small.
 
+### Real data: Metro Interstate Traffic Volume
+
+The same pipeline, with no model changes, on the UCI/Kaggle *Metro Interstate
+Traffic Volume* set loaded via the adapter: hourly counts, 12,854 rows
+(2017-04-13 → 2018-09-30), chronological test split, 6-hour lookback. Errors in
+vehicles (counts per hour):
+
+| Horizon | Model            | MAE (veh) | RMSE (veh) | R²        |
+| ------- | ---------------- | --------- | ---------- | --------- |
+| 1 h     | Persistence      | 581.3     | 800.3      | 0.829     |
+| 1 h     | **XGBoost**      | **144.6** | **213.4**  | **0.988** |
+| 2 h     | Persistence      | 1,054.6   | 1,449.0    | 0.440     |
+| 2 h     | **XGBoost**      | **171.5** | **248.6**  | **0.984** |
+| 3 h     | Persistence      | 1,489.7   | 1,944.1    | -0.007    |
+| 3 h     | **XGBoost**      | **182.7** | **263.5**  | **0.982** |
+
+The real road is *more* predictable than the mock data at these horizons: hourly
+volume is dominated by a strong daily/weekly profile that the calendar features
+capture, so R² stays ≈0.98 even three hours out while persistence collapses to
+zero. Absolute errors are large simply because the volumes are large (mean
+≈3,357, p95 ≈6,240 vehicles/hour). As with the synthetic data, the model's edge
+over persistence grows with the horizon.
+
+![Dashboard on real Metro data](docs/dashboard_metro.png)
+
 ---
 
 ## Screenshot
@@ -187,6 +246,9 @@ count and observed capacity.
 ---
 
 ## Dashboard features
+
+Cadence labels (minutes vs. hours, and the per-interval unit) follow the active
+dataset — the synthetic default reads in 5-minute steps, the Metro preset in hours.
 
 * **Sidebar controls**
   * **Lookback window** — history fed to the model: 30 min / 1 h / 2 h
@@ -281,14 +343,19 @@ be tuned. A non-positive capacity falls back safely to **Low**.
 
 ## Limitations
 
-* **Synthetic data.** Counts are generated from hand-tuned curves, not real
-  traffic, so absolute errors are illustrative rather than transferable.
+* **Synthetic by default.** The shipped dataset is generated from hand-tuned
+  curves, so the headline synthetic results are illustrative rather than
+  transferable. The real-data path is included, but it targets single-sensor
+  count files, not a live feed.
+* **Gap handling.** The adapter keeps the largest contiguous block and lets the
+  pipeline forward-fill short (≤ `--max-gap-h`) outages; longer outages are cut
+  rather than modelled.
 * **One sensor, no space.** There is no spatial correlation between neighbouring
   links, only the history of a single detector.
 * **Persistence is a strong baseline at short horizons.** The 15-minute gain is
   real but modest; traffic simply does not change much in a quarter hour.
-* **Fixed lookbacks.** Only 30 min / 1 h / 2 h are supported; anything else needs
-  retraining.
+* **Fixed lookbacks.** The shipped model set is fixed per dataset (30 min / 1 h /
+  2 h for the 5-minute default); a different lookback needs a retrain.
 * **Fixed hyperparameters.** `n_estimators`, `learning_rate` and `max_depth` are
   hard-coded with no search.
 * **Arbitrary congestion thresholds.** The 0.40 / 0.70 cut-offs are not
@@ -304,8 +371,9 @@ be tuned. A non-positive capacity falls back safely to **Low**.
 
 ## Future work
 
-* **Real data ingestion.** `src/fetch_live.py` is an empty placeholder for a real
-  feed (public traffic API or loop-detector stream) to replace the mock stream.
+* **Live ingestion.** `src/load_dataset.py` covers offline files; `src/fetch_live.py`
+  is still an empty placeholder for a real streaming feed (public traffic API or
+  loop-detector stream) to replace the mock stream.
 * **Richer features.** Rolling trend/slope, holiday and weather signals, and
   spatial neighbours.
 * **Uncertainty.** Quantile regression or conformal intervals instead of a single
@@ -327,4 +395,5 @@ python -m pytest -q
 ```
 
 Covers windowing/leakage, congestion boundary values, and training/inference
-feature parity (so the dashboard builds features exactly like training does).
+feature parity (so the dashboard builds features exactly like training does), and
+the real-data adapter (dedupe, resampling, gap splitting, manifest, duration labels).

@@ -2,7 +2,8 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 import joblib
-import os
+
+from src.config import DATA_PATH, MODELS_DIR, scaler_filename
 
 def add_time_features(df):
     """Generates cyclic encodings for hour and day of week."""
@@ -83,7 +84,7 @@ def make_windows(df, lookback, horizon, target_col='vehicle_count_scaled'):
 
 def process_data(lookback=12, horizon=3):
     """Main pipeline execution for training."""
-    df = pd.read_csv("data/raw/traffic.csv")
+    df = pd.read_csv(DATA_PATH)
     df = add_time_features(df)
     
     # Handle the missing values injected in Phase 1. Forward-fill for interior
@@ -107,8 +108,8 @@ def process_data(lookback=12, horizon=3):
     test_df['vehicle_count_scaled'] = scaler.transform(test_df[['vehicle_count']])
     
     # Save the scaler for inference in the Streamlit app
-    os.makedirs("models", exist_ok=True)
-    joblib.dump(scaler, "models/scaler.joblib")
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    joblib.dump(scaler, MODELS_DIR / scaler_filename())
     
     # Generate sliding windows separately to prevent boundary leakage
     X_train, y_train = make_windows(train_df, lookback, horizon)

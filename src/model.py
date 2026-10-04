@@ -1,11 +1,17 @@
 import json
-import os
 import joblib
 import numpy as np
 from xgboost import XGBRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from src.data_pipeline import process_data
-from src.config import HORIZONS_MIN, HORIZONS_STEPS, LOOKBACK_OPTIONS
+from src.config import (
+    HORIZONS_MIN,
+    HORIZONS_STEPS,
+    LOOKBACK_OPTIONS,
+    MODELS_DIR,
+    metrics_filename,
+    model_filename,
+)
 
 def evaluate_metrics(y_true, y_pred):
     return {
@@ -21,7 +27,7 @@ def train_and_evaluate():
     We ship models for a small set of fixed lookbacks (see LOOKBACK_OPTIONS)
     instead of retraining when the dashboard lookback slider moves.
     """
-    os.makedirs("models", exist_ok=True)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
     results = {}
 
     print(f"{'Lookback':<9} | {'Horizon':<8} | {'Model':<12} | {'MAE':<7} | {'RMSE':<7} | {'R2':<7}")
@@ -73,8 +79,9 @@ def train_and_evaluate():
             print(f"{lookback:>5} st | {h_min:>3} mins | {'XGBoost':<12} | {xgb_metrics['MAE']:.3f} | {xgb_metrics['RMSE']:.3f} | {xgb_metrics['R2']:.3f}")
             print("-" * 70)
 
-            # Save Model (lookback-specific filename so the dashboard can load by name)
-            model_path = f"models/xgb_lb{lookback}_h{h_min}.joblib"
+            # Save Model (lookback/horizon-specific filename so the dashboard can
+            # load by name; namespaced by interval so datasets never collide)
+            model_path = MODELS_DIR / model_filename(lookback, h_min)
             joblib.dump(xgb, model_path)
 
             # Store results
@@ -84,7 +91,7 @@ def train_and_evaluate():
             }
 
     # Save metrics to JSON
-    with open("models/metrics.json", "w") as f:
+    with open(MODELS_DIR / metrics_filename(), "w") as f:
         json.dump(results, f, indent=4)
     print("Training complete. Models and metrics saved to models/ directory.")
 

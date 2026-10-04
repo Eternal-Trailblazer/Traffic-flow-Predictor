@@ -25,7 +25,6 @@ No extra dependency (streamlit-autorefresh) is required.
 """
 
 import json
-from pathlib import Path
 
 import joblib
 import numpy as np
@@ -34,10 +33,18 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.config import (
+    DATA_PATH,
+    DATASET_NAME,
+    MODELS_DIR,
     SAMPLING_INTERVAL_MIN,
+    STEPS_PER_HOUR,
     HORIZONS_MIN,
     HORIZONS_STEPS,
     LOOKBACK_OPTIONS,
+    format_duration,
+    metrics_filename,
+    model_filename,
+    scaler_filename,
 )
 from src.congestion import get_congestion_level
 from src.data_pipeline import add_time_features, make_features
@@ -45,14 +52,11 @@ from src.data_pipeline import add_time_features, make_features
 # --------------------------------------------------------------------------- #
 # Configuration
 # --------------------------------------------------------------------------- #
-DATA_PATH = Path("data/raw/traffic.csv")
-MODELS_DIR = Path("models")
-
-# How much history to draw on the main chart (one step = 5 minutes).
+# How much history to draw on the main chart (one step = SAMPLING_INTERVAL_MIN).
 DISPLAY_WINDOWS = {
-    "12 hours": 12 * 12,
-    "1 day": 24 * 12,
-    "2 days": 48 * 12,
+    "12 hours": 12 * STEPS_PER_HOUR,
+    "1 day": 24 * STEPS_PER_HOUR,
+    "2 days": 48 * STEPS_PER_HOUR,
 }
 
 # Congestion semantics (label -> colour).
@@ -347,8 +351,9 @@ def render_header(horizon_min: int, capacity: float, live_mode: bool,
           <div>
             <div class="tfp-title">🚦 Traffic Flow Predictor</div>
             <div class="tfp-sub">
-              Forecasting vehicle counts <b>{horizon_min} minutes ahead</b>
-              &nbsp;·&nbsp; capacity (95th percentile) ≈ <b>{capacity:,.0f}</b> veh / 5 min
+              Forecasting vehicle counts <b>{format_duration(horizon_min)} ahead</b>
+              &nbsp;·&nbsp; capacity (95th percentile) ≈ <b>{capacity:,.0f}</b> veh / {format_duration(SAMPLING_INTERVAL_MIN)}
+              &nbsp;·&nbsp; dataset <b>{DATASET_NAME}</b>
             </div>
           </div>
           <div>{status}</div>
@@ -372,21 +377,21 @@ def load_traffic_data(path: str) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def load_metrics() -> dict:
-    with open(MODELS_DIR / "metrics.json", "r") as f:
+    with open(MODELS_DIR / metrics_filename(), "r") as f:
         return json.load(f)
 
 
 @st.cache_resource(show_spinner=False)
 def load_model_and_scaler(lookback: int, horizon_min: int):
     """Loads the shipped XGBoost model for a fixed (lookback, horizon) pair."""
-    model_path = MODELS_DIR / f"xgb_lb{lookback}_h{horizon_min}.joblib"
+    model_path = MODELS_DIR / model_filename(lookback, horizon_min)
     if not model_path.exists():
         raise FileNotFoundError(
-            f"Missing model {model_path}. Run `python -m src.model` to train the "
-            f"fixed lookbacks {LOOKBACK_OPTIONS}."
+            f"Missing model {model_path.name}. Run `python -m src.model` to train "
+            f"the fixed lookbacks {LOOKBACK_OPTIONS} for this dataset."
         )
     model = joblib.load(model_path)
-    scaler = joblib.load(MODELS_DIR / "scaler.joblib")
+    scaler = joblib.load(MODELS_DIR / scaler_filename())
     return model, scaler
 
 
@@ -450,7 +455,7 @@ def render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity):
             kpi_card(
                 "Congestion",
                 label,
-                f"in {horizon_min} min · {forecast_val:,.0f} veh · {pct:,.0f}% of capacity",
+                f"in {format_duration(horizon_min)} · {forecast_val:,.0f} veh · {pct:,.0f}% of capacity",
                 accent=colour,
                 bar=(pct, colour),
             ),
@@ -461,8 +466,8 @@ def render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity):
             kpi_card(
                 "Forecast",
                 f"{forecast_val:,.0f}",
-                f'in {horizon_min} min · <span class="{delta_cls}">{delta_txt}</span>',
-                unit="veh/5 min",
+                f'in {format_duration(horizon_min)} · <span class="{delta_cls}">{delta_txt}</span>',
+                unit=f"veh/{format_duration(SAMPLING_INTERVAL_MIN)}",
                 accent=TRACE_COLOURS["forecast"],
             ),
             unsafe_allow_html=True,
@@ -473,7 +478,7 @@ def render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity):
                 "Current",
                 f"{actual_now:,.0f}",
                 f"{now_ts:%H:%M} · row {now_idx + 1:,} of {len(df):,}",
-                unit="veh/5 min",
+                unit=f"veh/{format_duration(SAMPLING_INTERVAL_MIN)}",
             ),
             unsafe_allow_html=True,
         )
@@ -483,7 +488,7 @@ def render_kpi_row(now_idx, df, preds, lookback, horizon_min, capacity):
                 "Capacity",
                 f"{capacity:,.0f}",
                 "95th percentile · reference line on chart",
-                unit="veh/5 min",
+                unit=f"veh/{format_duration(SAMPLING_INTERVAL_MIN)}",
                 accent=TRACE_COLOURS["capacity"],
             ),
             unsafe_allow_html=True,
@@ -510,7 +515,7 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx,
         fillcolor=TRACE_COLOURS["predicted"],
         opacity=0.14,
         line_width=0,
-        annotation_text=f"Forecast ({horizon_min} min)",
+        annotation_text=f"Forecast ({format_duration(horizon_min)})",
         annotation_position="top left",
         annotation_font_size=11,
         annotation_font_color=axis_text,
@@ -546,7 +551,7 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx,
                 x=ts[target_idx[mask]],
                 y=preds[mask],
                 mode="lines",
-                name=f"Predicted ({horizon_min} min ahead)",
+                name=f"Predicted ({format_duration(horizon_min)} ahead)",
                 line=dict(color=TRACE_COLOURS["predicted"], width=1.8, dash="dash"),
                 hovertemplate="%{x|%b %d %H:%M} · %{y:.0f} veh<extra>Predicted</extra>",
             )
@@ -611,7 +616,7 @@ def build_figure(df, preds, target_idx, lookback, horizon_min, now_idx,
         gridcolor=grid,
         zeroline=False,
         showline=False,
-        title="Vehicles / 5 min",
+        title=f"Vehicles / {format_duration(SAMPLING_INTERVAL_MIN)}",
         title_font=dict(color=axis_text, size=12),
         tickfont=dict(color=axis_text),
     )
@@ -624,8 +629,8 @@ def render_metrics_panel(metrics, lookback, horizon_min, scale):
     pers = metrics["persistence"]
 
     st.markdown(
-        f'<div class="tfp-section">Model performance · {horizon_min} min horizon'
-        f' · lookback {lookback * SAMPLING_INTERVAL_MIN} min</div>',
+        f'<div class="tfp-section">Model performance · {format_duration(horizon_min)} horizon'
+        f' · lookback {format_duration(lookback * SAMPLING_INTERVAL_MIN)}</div>',
         unsafe_allow_html=True,
     )
 
@@ -725,7 +730,7 @@ lookback = st.sidebar.segmented_control(
     options=LOOKBACK_OPTIONS,
     default=LOOKBACK_OPTIONS[1],
     selection_mode="single",
-    format_func=lambda steps: f"{steps * SAMPLING_INTERVAL_MIN} min",
+    format_func=lambda steps: format_duration(steps * SAMPLING_INTERVAL_MIN),
     width="stretch",
     help="History window used as model input. Models are pre-trained for each "
          "of these stops — switching swaps models rather than retraining.",
@@ -733,11 +738,11 @@ lookback = st.sidebar.segmented_control(
 horizon_min = st.sidebar.segmented_control(
     "Prediction horizon",
     options=HORIZONS_MIN,
-    default=30,
+    default=HORIZONS_MIN[1],
     selection_mode="single",
-    format_func=lambda m: f"{m} min",
+    format_func=format_duration,
     width="stretch",
-) or 30
+) or HORIZONS_MIN[1]
 display_label = st.sidebar.segmented_control(
     "Chart history",
     options=list(DISPLAY_WINDOWS.keys()),
@@ -757,8 +762,8 @@ with st.sidebar.expander("About the lookback"):
         <div class="tfp-side-note">
         The lookback changes the model <b>input shape</b>, so it cannot be
         retrained on the fly. We train once for the fixed lookbacks
-        <code>{LOOKBACK_OPTIONS}</code> (30 min / 1 h / 2 h) and the selector picks
-        among those pre-trained models.
+        <code>{LOOKBACK_OPTIONS}</code> ({ " / ".join(format_duration(s * SAMPLING_INTERVAL_MIN) for s in LOOKBACK_OPTIONS) })
+        and the selector picks among those pre-trained models.
         </div>
         """,
         unsafe_allow_html=True,
@@ -803,7 +808,7 @@ _ts = df["timestamp"].iloc[len(df) - 1]
 render_header(horizon_min, capacity, live_mode, live_interval, _ts)
 
 if live_mode:
-    live_start = max(lookback - 1, len(df) - 1 - (24 * 12))  # 1 day of ticks
+    live_start = max(lookback - 1, len(df) - 1 - (24 * STEPS_PER_HOUR))  # 1 day of ticks
     if st.session_state.get("_live_lookback") != lookback:
         st.session_state._live_cursor = live_start
         st.session_state._live_lookback = lookback
