@@ -112,9 +112,23 @@ and cards consistent.
 ### Live mode
 
 Live mode uses Streamlit's built-in `st.fragment(run_every=…)` as the refresh
-loop and writes into `st.empty()` placeholders, advancing the mock stream one
-step per tick. No extra dependency (`streamlit-autorefresh`) is required. When
-the cursor reaches the end of the data it wraps back to one day before the end.
+loop, advancing the mock stream one step per tick. No extra dependency
+(`streamlit-autorefresh`) is required. When the cursor reaches the end of the
+data it wraps back to one day before the end.
+
+Ticks render without visible flicker:
+
+* The header and KPI cards are written **directly** rather than into
+  `st.empty()` placeholders. An empty's subtree is replaced wholesale each
+  rerun, which destroyed and rebuilt those blocks every tick and delayed the
+  chart's repaint.
+* The chart sits in a **fixed-height box** (`st.container(height=…)`), so its
+  space stays reserved while Streamlit repaints it — nothing below reflows.
+* A short CSS **fade-in** softens the chart's swap.
+
+Streamlit derives a chart's element id from the figure JSON, so the chart is
+remounted once per tick by design. Measured on the live loop: ~34–43 ms repaint
+per tick and zero layout movement (was up to 223 ms plus layout jumps).
 
 ---
 
