@@ -3,7 +3,7 @@ Phase 5: Streamlit dashboard for the traffic-flow predictor.
 
 Features
 --------
-* Sidebar: lookback slider, horizon selector (15/30/60 min), "simulate live" toggle.
+* Sidebar: lookback selector, horizon selector (15/30/60 min), "simulate live" toggle.
 * Plotly chart: actual vs. predicted with a visually separated forecast region.
 * Colour-coded congestion indicator (Low / Medium / High).
 * Metrics panel with MAE / RMSE / R2 for the selected horizon.
@@ -720,14 +720,16 @@ def render_view(now_idx, df, preds, target_idx, lookback, horizon_min,
 # --------------------------------------------------------------------------- #
 st.sidebar.markdown('<div class="tfp-section">Controls</div>', unsafe_allow_html=True)
 
-lookback = st.sidebar.select_slider(
+lookback = st.sidebar.segmented_control(
     "Lookback window",
     options=LOOKBACK_OPTIONS,
-    value=LOOKBACK_OPTIONS[1],
+    default=LOOKBACK_OPTIONS[1],
+    selection_mode="single",
     format_func=lambda steps: f"{steps * SAMPLING_INTERVAL_MIN} min",
-    help="Sliding history used as model input. Models are pre-trained for each "
-         "of these stops — moving the slider swaps models rather than retraining.",
-)
+    width="stretch",
+    help="History window used as model input. Models are pre-trained for each "
+         "of these stops — switching swaps models rather than retraining.",
+) or LOOKBACK_OPTIONS[1]
 horizon_min = st.sidebar.segmented_control(
     "Prediction horizon",
     options=HORIZONS_MIN,
@@ -749,13 +751,13 @@ live_interval = 3
 if live_mode:
     live_interval = st.sidebar.slider("Refresh (seconds)", 1, 10, 3)
 
-with st.sidebar.expander("About the lookback slider"):
+with st.sidebar.expander("About the lookback"):
     st.markdown(
         f"""
         <div class="tfp-side-note">
         The lookback changes the model <b>input shape</b>, so it cannot be
         retrained on the fly. We train once for the fixed lookbacks
-        <code>{LOOKBACK_OPTIONS}</code> (30 min / 1 h / 2 h) and the slider picks
+        <code>{LOOKBACK_OPTIONS}</code> (30 min / 1 h / 2 h) and the selector picks
         among those pre-trained models.
         </div>
         """,

@@ -136,12 +136,12 @@ per tick and zero layout movement (was up to 223 ms plus layout jumps).
 ## Lookback design (important, honest trade-off)
 
 The lookback window changes the **model input**, so a model trained with one
-lookback cannot be used with another. Retraining on every slider move would make
-the dashboard slow and non-reproducible. The simplest honest design — used here
-— is:
+lookback cannot be used with another. Retraining every time the selection changes
+would make the dashboard slow and non-reproducible. The simplest honest design —
+used here — is:
 
 > **Train models once for a few fixed lookbacks (6, 12, 24 steps) and let the
-> slider pick among the pre-trained models.** The slider does not retrain.
+> selector pick among the pre-trained models.** The selector does not retrain.
 
 This keeps the app instant while remaining honest about what is happening. If a
 different lookback is needed, add it to `LOOKBACK_OPTIONS` in `src/config.py`
