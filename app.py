@@ -266,13 +266,13 @@ div[data-testid="stMetric"] {{
 
 /* ---- chart repaint smoothness -------------------------------------------- */
 /* The chart element is remounted by Streamlit each tick (its id is derived
-   from the figure JSON). Reserve space above prevents layout collapse; this
-   short fade turns the hard remove/insert swap into a soft crossfade. */
+   from the figure JSON). The reserved box prevents layout collapse; this
+   short fade softens the hard remove/insert swap. */
 [data-testid="stElementContainer"]:has(.js-plotly-plot) {{
-    animation: tfpChartIn 0.28s ease-in-out;
+    animation: tfpChartIn 0.2s ease-out;
 }}
 @keyframes tfpChartIn {{
-    from {{ opacity: 0.35; }}
+    from {{ opacity: 0.55; }}
     to   {{ opacity: 1; }}
 }}
 
